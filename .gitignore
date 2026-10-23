@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+.env
+
+# dane (nigdy do repozytorium)
+*.csv
+*.xlsx
+wyniki_*.txt
