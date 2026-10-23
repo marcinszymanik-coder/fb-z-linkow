@@ -12,6 +12,8 @@ st.set_page_config(page_title="Dopasowanie postów FB do artykułów",
 
 
 # ---------- dostęp ----------
+# Tu można później podmienić logowanie hasłem na logowanie przez Google
+# (st.login + sprawdzenie, czy st.user.email jest na liście dozwolonych).
 
 def _haslo_z_secrets():
     try:
@@ -65,9 +67,14 @@ with st.sidebar:
     min_wynik_2 = st.slider("Wynik wymagany przy 2 trafieniach", 0.05, 1.0, 0.45, 0.05)
     min_przewaga = st.slider("Minimalna przewaga nad drugim (1.0 = wyłączone)", 1.0, 2.0, 1.2, 0.05)
     potega_idf = st.slider("Waga słów rzadkich (potęga IDF)", 1.0, 3.0, 2.0, 0.5)
+    dlugosc_klucza = st.slider("Długość klucza słowa (krótszy = lepiej łapie odmiany)", 4, 7, 6)
+    stop_txt = st.text_input("Dodatkowe słowa do pominięcia (po przecinku)", "",
+                             help="Małe litery, bez polskich znaków, np.: igus, automatyka")
+    dodatkowe_stop = tuple(s.strip().lower() for s in stop_txt.split(",") if s.strip())
     unikalne = st.checkbox("Jedna treść tylko do jednego artykułu", value=True)
     ust = m.Ustawienia(min_trafien, min_wynik, min_wynik_2, min_przewaga,
-                       potega_idf, unikalne, 5)
+                       potega_idf, unikalne, 5,
+                       dlugosc_klucza=dlugosc_klucza, dodatkowe_stop=dodatkowe_stop)
 
 c1, c2, c3 = st.columns(3)
 csv_file = c1.file_uploader("1. CSV z Facebooka", type=["csv"])
@@ -100,7 +107,8 @@ if st.button("Szukaj", type="primary", disabled=not (csv_file and art_file)):
         raport_txt, raport_df = m.zbuduj_raport(wyniki_std, wyniki_dop)
         st.session_state["wynik"] = {
             "ust": asdict(ust), "brak_w_csv": brak_w_csv,
-            "n_posty": len(ind.teksty), "n_pustych": sum(1 for t in ind.teksty.values() if len(t) < 30),
+            "n_posty": len(ind.teksty),
+            "n_pustych": sum(1 for t in ind.teksty.values() if len(t) < 30),
             "wyniki_std": wyniki_std, "wyniki_dop": wyniki_dop,
             "szczegoly": szczegoly, "raport_txt": raport_txt, "raport_df": raport_df,
             "debug_txt": m.debug_txt(szczegoly, ust, ind),
@@ -112,7 +120,8 @@ if st.button("Szukaj", type="primary", disabled=not (csv_file and art_file)):
 w = st.session_state.get("wynik")
 if w:
     if w["ust"] != asdict(ust):
-        st.warning("Ustawienia zmieniły się od ostatniego wyszukiwania. Kliknij „Szukaj\", żeby przeliczyć.")
+        st.warning("Ustawienia zmieniły się od ostatniego wyszukiwania. "
+                   "Kliknij „Szukaj\", żeby przeliczyć.")
     if w["brak_w_csv"]:
         with st.expander(f"⚠ {len(w['brak_w_csv'])} postów z listy nie ma w CSV"):
             st.write("\n".join(w["brak_w_csv"]))
@@ -161,6 +170,8 @@ if w:
                              hide_index=True)
     with t4:
         st.download_button("Raport (.txt)", w["raport_txt"], "wyniki_linkow_fb.txt", "text/plain")
-        st.download_button("Wyniki (.csv)", w["raport_df"].to_csv(index=False, sep=";").encode("utf-8-sig"),
+        st.download_button("Wyniki (.csv)",
+                           w["raport_df"].to_csv(index=False, sep=";").encode("utf-8-sig"),
                            "wyniki_linkow_fb.csv", "text/csv")
-        st.download_button("Diagnostyka (.txt)", w["debug_txt"], "wyniki_linkow_fb_debug.txt", "text/plain")
+        st.download_button("Diagnostyka (.txt)", w["debug_txt"],
+                           "wyniki_linkow_fb_debug.txt", "text/plain")
