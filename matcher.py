@@ -16,7 +16,7 @@ STOP = {"jak", "dla", "czy", "oraz", "przed", "przez", "tez", "sie", "nie",
         "co", "do", "od", "po", "na", "ze", "to", "jest", "ktore", "ktory",
         "ile", "lub", "ale", "tylko", "jakie", "jakich", "dlaczego", "warto",
         "poznaj", "sprawdz", "zobacz", "naprawde", "moze", "musisz", "masz",
-        "twoj", "twoje", "kiedy", "dobre", "dobrze", "ktora", "wszystko"}
+        "twoj", "twoje", "kiedy", "dobre", "dobrze", "ktora", "wszystko", "gdy"}
 
 
 @dataclass
@@ -28,6 +28,8 @@ class Ustawienia:
     potega_idf: float = 2.0
     unikalne_posty: bool = True
     liczba_kandydatow: int = 5
+    dlugosc_klucza: int = 6        # 4-7; krótszy klucz lepiej łapie odmiany słów
+    dodatkowe_stop: tuple = ()     # słowa pomijane (małe litery, bez ogonków)
 
 
 @dataclass
@@ -61,17 +63,18 @@ def normalizuj_fb(url) -> str:
     return re.sub(r"^https?://(www\.|m\.)?", "", url)
 
 
-def klucz(w: str) -> str:
-    """Krótkie słowa w całości, dłuższe bez ostatniej litery (maks. 6 znaków)."""
-    return w if len(w) <= 4 else w[:min(len(w) - 1, 6)]
+def klucz(w: str, n: int = 6) -> str:
+    """Krótkie słowa w całości, dłuższe bez ostatniej litery (maks. n znaków)."""
+    return w if len(w) <= 4 else w[:min(len(w) - 1, n)]
 
 
-def klucze_z_url(url: str) -> set:
+def klucze_z_url(url: str, ust: Ustawienia) -> set:
     slug = czysty_url(url).rstrip("/").split("/")[-1]
     slug = re.sub(r"^\d+-", "", slug)
     slug = re.sub(r"\.\w{2,5}$", "", slug)
-    return {klucz(bez_ogonkow(s.lower())) for s in slug.split("-")
-            if len(s) > 2 and s.lower() not in STOP}
+    stop = STOP | set(ust.dodatkowe_stop)
+    return {klucz(bez_ogonkow(s.lower()), ust.dlugosc_klucza) for s in slug.split("-")
+            if len(s) > 2 and s.lower() not in stop}
 
 
 def kolumny_tekstu_posta(df: pd.DataFrame) -> list:
@@ -183,7 +186,7 @@ def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia):
                  for u in artykuly_urls}
     artykuly = {}
     for u in artykuly_urls:
-        k = klucze_z_url(u)
+        k = klucze_z_url(u, ust)
         if k:
             artykuly[u] = k
         else:
