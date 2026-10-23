@@ -1,4 +1,3 @@
-import hmac
 import os
 from dataclasses import asdict
 
@@ -11,27 +10,31 @@ st.set_page_config(page_title="Dopasowanie postów FB do artykułów",
                    page_icon="🔗", layout="wide")
 
 
-# ---------- dostęp ----------
-# Tu można później podmienić logowanie hasłem na logowanie przez Google
-# (st.login + sprawdzenie, czy st.user.email jest na liście dozwolonych).
+# ---------- dostęp (logowanie przez Google) ----------
 
-def _haslo_z_secrets():
+def _secret(nazwa, domyslnie=None):
     try:
-        return st.secrets["APP_PASSWORD"]
+        return st.secrets[nazwa]
     except Exception:
-        return None
+        return domyslnie
 
 
 def wymagaj_logowania():
-    if not st.user.is_logged_in:
-        st.title("Logowanie")
-        st.button("Zaloguj przez Google", on_click=st.login)
+    # tylko do pracy lokalnej: ALLOW_NO_LOGIN=1 streamlit run app.py
+    if os.environ.get("ALLOW_NO_LOGIN") == "1":
+        return
+
+    if _secret("auth") is None:
+        st.error("Brak sekcji `[auth]` w Secrets. Uzupełnij konfigurację logowania Google.")
         st.stop()
 
-    try:
-        dozwolone = [e.lower() for e in st.secrets["ALLOWED_EMAILS"]]
-    except Exception:
-        dozwolone = []
+    if not st.user.is_logged_in:
+        st.title("🔗 Dopasowanie postów z Facebooka do artykułów")
+        st.write("Zaloguj się kontem Google, aby korzystać z aplikacji.")
+        st.button("Zaloguj przez Google", on_click=st.login, type="primary")
+        st.stop()
+
+    dozwolone = [str(e).lower() for e in (_secret("ALLOWED_EMAILS", []) or [])]
     email = str(st.user.get("email") or "").lower()
     zweryfikowany = bool(st.user.get("email_verified"))
 
@@ -59,7 +62,7 @@ def indeks_cached(df: pd.DataFrame):
 
 # ---------- UI ----------
 
-wymagaj_hasla()
+wymagaj_logowania()
 st.title("🔗 Dopasowanie postów z Facebooka do artykułów")
 st.caption("Pliki są przetwarzane w pamięci i nie są zapisywane na serwerze.")
 
