@@ -22,24 +22,27 @@ def _haslo_z_secrets():
         return None
 
 
-def wymagaj_hasla():
-    haslo = _haslo_z_secrets()
-    if not haslo:
-        if os.environ.get("ALLOW_NO_PASSWORD") == "1":   # tylko do pracy lokalnej
-            return
-        st.error("Aplikacja zablokowana: brak `APP_PASSWORD` w Secrets.")
+def wymagaj_logowania():
+    if not st.user.is_logged_in:
+        st.title("Logowanie")
+        st.button("Zaloguj przez Google", on_click=st.login)
         st.stop()
-    if st.session_state.get("auth"):
-        return
-    with st.form("login"):
-        wpisane = st.text_input("Hasło", type="password")
-        if st.form_submit_button("Zaloguj"):
-            if hmac.compare_digest(wpisane.encode(), str(haslo).encode()):
-                st.session_state["auth"] = True
-                st.rerun()
-            else:
-                st.error("Nieprawidłowe hasło.")
-    st.stop()
+
+    try:
+        dozwolone = [e.lower() for e in st.secrets["ALLOWED_EMAILS"]]
+    except Exception:
+        dozwolone = []
+    email = str(st.user.get("email") or "").lower()
+    zweryfikowany = bool(st.user.get("email_verified"))
+
+    if not dozwolone or email not in dozwolone or not zweryfikowany:
+        st.error(f"Brak dostępu dla konta: {email or 'nieznane'}")
+        st.button("Wyloguj", on_click=st.logout)
+        st.stop()
+
+    with st.sidebar:
+        st.caption(f"Zalogowano: {email}")
+        st.button("Wyloguj", on_click=st.logout)
 
 
 # ---------- cache ----------
