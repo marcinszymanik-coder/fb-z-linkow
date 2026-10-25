@@ -106,8 +106,9 @@ with st.sidebar:
     max_akapitow = st.slider("Liczba akapitów leadu", 1, 3, 1, disabled=not pobierz_leady)
     liczba_kluczy_leadu = st.slider("Słowa z leadu do dopasowania", 0, 15, 8,
                                     disabled=not pobierz_leady)
-    waga_leadu = st.slider("Waga słów z leadu (względem sluga)", 0.1, 1.0, 0.7, 0.1,
-                           disabled=not pobierz_leady)
+    waga_leadu = st.slider("Udział leadu w wyniku (0–1)", 0.1, 0.9, 0.4, 0.1,
+                           disabled=not pobierz_leady,
+                           help="Wynik = (1 - udział) x wynik ze sluga + udział x wynik z leadu.")
 
     ust = m.Ustawienia(min_trafien, min_wynik, min_wynik_2, min_przewaga,
                        potega_idf, unikalne, 5,
@@ -116,11 +117,9 @@ with st.sidebar:
                        waga_leadu=waga_leadu)
     leady_ust = (pobierz_leady, selektor.strip(), max_akapitow)
 
-c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
 csv_file = c1.file_uploader("1. CSV z Facebooka", type=["csv"])
 art_file = c2.file_uploader("2. Linki do artykułów (.txt/.csv)", type=["txt", "csv"])
-posty_file = c3.file_uploader("3. Lista postów (opcjonalnie, zawęża wyszukiwanie)",
-                              type=["txt", "csv"])
 
 if st.button("Szukaj", type="primary", disabled=not (csv_file and art_file)):
     try:
@@ -129,16 +128,6 @@ if st.button("Szukaj", type="primary", disabled=not (csv_file and art_file)):
         if not linki:
             st.error("W pliku z artykułami nie znaleziono żadnych linków.")
             st.stop()
-        brak_w_csv = []
-        if posty_file:
-            lista = m.wczytaj_linki_bytes(posty_file.getvalue())
-            if not lista:
-                st.error("W pliku z listą postów nie znaleziono żadnych linków.")
-                st.stop()
-            df, brak_w_csv = m.zawez_do_listy(df, lista)
-            if df.empty:
-                st.error("Żaden post z listy nie występuje w CSV.")
-                st.stop()
 
         wyniki_std = m.szukaj_bezposrednio(df, linki)
         nieznalezione = [w[0] for w in wyniki_std if not w[2]]
@@ -155,7 +144,7 @@ if st.button("Szukaj", type="primary", disabled=not (csv_file and art_file)):
         wyniki_dop, szczegoly = m.dopasuj(ind, nieznalezione, ust, teksty_art)
         raport_txt, raport_df = m.zbuduj_raport(wyniki_std, wyniki_dop)
         st.session_state["wynik"] = {
-            "ust": asdict(ust), "leady_ust": leady_ust, "brak_w_csv": brak_w_csv,
+            "ust": asdict(ust), "leady_ust": leady_ust,
             "n_posty": len(ind.teksty),
             "n_pustych": sum(1 for t in ind.teksty.values() if len(t) < 30),
             "wyniki_std": wyniki_std, "wyniki_dop": wyniki_dop,
@@ -172,9 +161,6 @@ if w:
     if w["ust"] != asdict(ust) or w["leady_ust"] != leady_ust:
         st.warning("Ustawienia zmieniły się od ostatniego wyszukiwania. "
                    "Kliknij „Szukaj\", żeby przeliczyć.")
-    if w["brak_w_csv"]:
-        with st.expander(f"⚠ {len(w['brak_w_csv'])} postów z listy nie ma w CSV"):
-            st.write("\n".join(w["brak_w_csv"]))
 
     art_dop = {a for a, _, _ in w["wyniki_dop"]}
     brak = [x[0] for x in w["wyniki_std"] if not x[2] and x[0] not in art_dop]
