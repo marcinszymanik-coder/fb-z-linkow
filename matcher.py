@@ -32,7 +32,7 @@ class Ustawienia:
     dlugosc_klucza: int = 6          # 4-7; krótszy klucz lepiej łapie odmiany słów
     dodatkowe_stop: tuple = ()       # słowa pomijane (małe litery, bez ogonków)
     liczba_kluczy_leadu: int = 8     # ile najrzadszych słów z leadu dodać (0 = wyłączone)
-    waga_leadu: float = 0.7          # waga słów z leadu względem słów ze sluga
+    waga_leadu: float = 0.4          # udział wyniku z leadu w wyniku końcowym (0-1)
 
 
 @dataclass
@@ -194,9 +194,8 @@ def przygotuj_indeks(df: pd.DataFrame) -> Indeks:
 
 def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia, teksty_art: dict | None = None):
     """Zwraca (wyniki, szczegoly).
-    wyniki: lista (artykuł, post, trafienia); posty o identycznej treści to osobne rekordy.
-    szczegoly: słownik artykuł -> dane diagnostyczne.
-    teksty_art: opcjonalnie url artykułu -> tekst (tytuł + lead); dodaje słowa z leadu."""
+    wynik = (1 - w) * wynik_ze_sluga + w * wynik_z_leadu, gdzie w = ust.waga_leadu
+    (gdy brakuje jednego ze źródeł, liczy się tylko drugie)."""
     teksty_art = teksty_art or {}
     szczegoly = {u: {"klucze": [], "powod": None, "kandydaci": [], "przydzial": []}
                  for u in artykuly_urls}
@@ -216,7 +215,7 @@ def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia, teksty_art: dict 
     def waga(k):
         return idf(k) ** ust.potega_idf
 
-    artykuly, zrodla = {}, {}
+    artykuly = {}   # url -> (klucze_slug, klucze_lead)
     for u in artykuly_urls:
         k_slug = klucze_z_url(u, ust)
         k_lead = set()
@@ -224,28 +223,32 @@ def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia, teksty_art: dict 
         if tekst and ust.liczba_kluczy_leadu > 0:
             kand = {k for k in klucze_z_tekstu(tekst, ust) - k_slug if dfk(k) >= 1}
             k_lead = set(sorted(kand, key=lambda k: (-idf(k), k))[:ust.liczba_kluczy_leadu])
-        wszystkie = k_slug | k_lead
-        if wszystkie:
-            artykuly[u] = wszystkie
-            zrodla[u] = {k: ("slug" if k in k_slug else "lead") for k in wszystkie}
+        if k_slug or k_lead:
+            artykuly[u] = (k_slug, k_lead)
         else:
             szczegoly[u]["powod"] = "brak użytecznych słów (slug i lead)"
     if not artykuly:
         return [], szczegoly
 
-    def waga_art(art_url, k):
-        mnoznik = ust.waga_leadu if zrodla[art_url][k] == "lead" else 1.0
-        return waga(k) * mnoznik
-
     pary = []
-    for art_url, art_klucze in artykuly.items():
-        mianownik = sum(waga_art(art_url, k) for k in art_klucze)
+    for art_url, (k_slug, k_lead) in artykuly.items():
+        m_slug = sum(waga(k) for k in k_slug)
+        m_lead = sum(waga(k) for k in k_lead)
+        if k_slug and k_lead:
+            w_l = ust.waga_leadu
+        else:
+            w_l = 1.0 if k_lead else 0.0
+
         kandydaci = []
         for fb_url, zb in ind.prefiksy.items():
-            wspolne = [k for k in art_klucze if k in zb]
-            if not wspolne:
+            h_slug = [k for k in k_slug if k in zb]
+            h_lead = [k for k in k_lead if k in zb]
+            if not h_slug and not h_lead:
                 continue
-            wynik = sum(waga_art(art_url, k) for k in wspolne) / mianownik
+            fs = sum(waga(k) for k in h_slug) / m_slug if m_slug else 0.0
+            fl = sum(waga(k) for k in h_lead) / m_lead if m_lead else 0.0
+            wynik = (1 - w_l) * fs + w_l * fl
+            wspolne = h_slug + h_lead
             tr = len(wspolne)
             ok = (tr >= ust.min_trafien and wynik >= ust.min_wynik
                   and (tr >= 3 or wynik >= ust.min_wynik_2_trafienia))
@@ -260,8 +263,8 @@ def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia, teksty_art: dict 
             niejednoznaczny = bool(inny and top[0] < inny[0] * ust.min_przewaga)
 
         s = szczegoly[art_url]
-        s["klucze"] = [(k, round(idf(k), 2), dfk(k), zrodla[art_url][k])
-                       for k in sorted(art_klucze)]
+        s["klucze"] = [(k, round(idf(k), 2), dfk(k), "slug" if k in k_slug else "lead")
+                       for k in sorted(k_slug | k_lead)]
         if not kandydaci:
             s["powod"] = "brak wspólnych słów z jakimkolwiek postem"
         elif not any(k[4] for k in kandydaci):
