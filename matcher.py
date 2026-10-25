@@ -5,6 +5,7 @@ import io
 import math
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 
 import pandas as pd
@@ -28,17 +29,20 @@ class Ustawienia:
     potega_idf: float = 2.0
     unikalne_posty: bool = True
     liczba_kandydatow: int = 5
-    dlugosc_klucza: int = 6        # 4-7; krótszy klucz lepiej łapie odmiany słów
-    dodatkowe_stop: tuple = ()     # słowa pomijane (małe litery, bez ogonków)
+    dlugosc_klucza: int = 6          # 4-7; krótszy klucz lepiej łapie odmiany słów
+    dodatkowe_stop: tuple = ()       # słowa pomijane (małe litery, bez ogonków)
+    liczba_kluczy_leadu: int = 8     # ile najrzadszych słów z leadu dodać (0 = wyłączone)
+    waga_leadu: float = 0.7          # waga słów z leadu względem słów ze sluga
 
 
 @dataclass
 class Indeks:
     kol: list
-    teksty: dict       # url posta -> tekst
-    prefiksy: dict     # url posta -> zbiór przedrostków słów
-    norm_tekst: dict   # url posta -> znormalizowany tekst
-    grupy: dict        # znormalizowany tekst -> lista url-i (identyczna treść)
+    teksty: dict         # url posta -> tekst
+    prefiksy: dict       # url posta -> zbiór przedrostków słów
+    norm_tekst: dict     # url posta -> znormalizowany tekst
+    grupy: dict          # znormalizowany tekst -> lista url-i (identyczna treść)
+    df_prefiksow: dict   # przedrostek -> w ilu postach występuje
 
 
 # ---------- pomocnicze ----------
@@ -75,6 +79,12 @@ def klucze_z_url(url: str, ust: Ustawienia) -> set:
     stop = STOP | set(ust.dodatkowe_stop)
     return {klucz(bez_ogonkow(s.lower()), ust.dlugosc_klucza) for s in slug.split("-")
             if len(s) > 2 and s.lower() not in stop}
+
+
+def klucze_z_tekstu(tekst: str, ust: Ustawienia) -> set:
+    stop = STOP | set(ust.dodatkowe_stop)
+    slowa = re.findall(r"\w+", bez_ogonkow(tekst.lower()))
+    return {klucz(s, ust.dlugosc_klucza) for s in slowa if len(s) > 2 and s not in stop}
 
 
 def kolumny_tekstu_posta(df: pd.DataFrame) -> list:
@@ -170,52 +180,72 @@ def przygotuj_indeks(df: pd.DataFrame) -> Indeks:
                 zb.add(w[:k])
         prefiksy[u] = zb
 
+    df_pref = Counter()
+    for zb in prefiksy.values():
+        df_pref.update(zb)
+
     norm_tekst = {u: re.sub(r"\s+", " ", t).strip().lower() for u, t in teksty.items()}
     grupy = {}
     for u, t in norm_tekst.items():
         if t:
             grupy.setdefault(t, []).append(u)
-    return Indeks(kol, teksty, prefiksy, norm_tekst, grupy)
+    return Indeks(kol, teksty, prefiksy, norm_tekst, grupy, dict(df_pref))
 
 
-def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia):
+def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia, teksty_art: dict | None = None):
     """Zwraca (wyniki, szczegoly).
     wyniki: lista (artykuł, post, trafienia); posty o identycznej treści to osobne rekordy.
-    szczegoly: słownik artykuł -> dane diagnostyczne."""
+    szczegoly: słownik artykuł -> dane diagnostyczne.
+    teksty_art: opcjonalnie url artykułu -> tekst (tytuł + lead); dodaje słowa z leadu."""
+    teksty_art = teksty_art or {}
     szczegoly = {u: {"klucze": [], "powod": None, "kandydaci": [], "przydzial": []}
                  for u in artykuly_urls}
-    artykuly = {}
-    for u in artykuly_urls:
-        k = klucze_z_url(u, ust)
-        if k:
-            artykuly[u] = k
-        else:
-            szczegoly[u]["powod"] = "slug bez użytecznych słów"
 
     n = len(ind.prefiksy)
-    if not artykuly or n == 0:
-        for u in artykuly:
+    if n == 0:
+        for u in artykuly_urls:
             szczegoly[u]["powod"] = "brak postów z tekstem"
         return [], szczegoly
 
-    wszystkie = set().union(*artykuly.values())
-    dfk = {k: sum(1 for s in ind.prefiksy.values() if k in s) for k in wszystkie}
+    def dfk(k):
+        return ind.df_prefiksow.get(k, 0)
 
     def idf(k):
-        return math.log((n + 1) / (dfk.get(k, 0) + 0.5)) + 0.1
+        return math.log((n + 1) / (dfk(k) + 0.5)) + 0.1
 
     def waga(k):
         return idf(k) ** ust.potega_idf
 
+    artykuly, zrodla = {}, {}
+    for u in artykuly_urls:
+        k_slug = klucze_z_url(u, ust)
+        k_lead = set()
+        tekst = teksty_art.get(u)
+        if tekst and ust.liczba_kluczy_leadu > 0:
+            kand = {k for k in klucze_z_tekstu(tekst, ust) - k_slug if dfk(k) >= 1}
+            k_lead = set(sorted(kand, key=lambda k: (-idf(k), k))[:ust.liczba_kluczy_leadu])
+        wszystkie = k_slug | k_lead
+        if wszystkie:
+            artykuly[u] = wszystkie
+            zrodla[u] = {k: ("slug" if k in k_slug else "lead") for k in wszystkie}
+        else:
+            szczegoly[u]["powod"] = "brak użytecznych słów (slug i lead)"
+    if not artykuly:
+        return [], szczegoly
+
+    def waga_art(art_url, k):
+        mnoznik = ust.waga_leadu if zrodla[art_url][k] == "lead" else 1.0
+        return waga(k) * mnoznik
+
     pary = []
     for art_url, art_klucze in artykuly.items():
-        mianownik = sum(waga(k) for k in art_klucze)
+        mianownik = sum(waga_art(art_url, k) for k in art_klucze)
         kandydaci = []
         for fb_url, zb in ind.prefiksy.items():
             wspolne = [k for k in art_klucze if k in zb]
             if not wspolne:
                 continue
-            wynik = sum(waga(k) for k in wspolne) / mianownik
+            wynik = sum(waga_art(art_url, k) for k in wspolne) / mianownik
             tr = len(wspolne)
             ok = (tr >= ust.min_trafien and wynik >= ust.min_wynik
                   and (tr >= 3 or wynik >= ust.min_wynik_2_trafienia))
@@ -230,7 +260,8 @@ def dopasuj(ind: Indeks, artykuly_urls: list, ust: Ustawienia):
             niejednoznaczny = bool(inny and top[0] < inny[0] * ust.min_przewaga)
 
         s = szczegoly[art_url]
-        s["klucze"] = [(k, round(idf(k), 2), dfk.get(k, 0)) for k in sorted(art_klucze)]
+        s["klucze"] = [(k, round(idf(k), 2), dfk(k), zrodla[art_url][k])
+                       for k in sorted(art_klucze)]
         if not kandydaci:
             s["powod"] = "brak wspólnych słów z jakimkolwiek postem"
         elif not any(k[4] for k in kandydaci):
@@ -321,16 +352,26 @@ def zbuduj_raport(wyniki_standardowe: list, wyniki_dopasowane: list):
     return "\n".join(linie), pd.DataFrame(wiersze, columns=["artykul", "post_fb", "metoda"])
 
 
-def debug_txt(szczegoly: dict, ust: Ustawienia, ind: Indeks) -> str:
+def debug_txt(szczegoly: dict, ust: Ustawienia, ind: Indeks, pobrane: dict | None = None) -> str:
     n_krotkich = sum(1 for t in ind.teksty.values() if len(t) < 30)
     linie = ["DIAGNOSTYKA DOPASOWANIA PO SŁOWNICTWIE", "=" * 70,
              f"Kolumny z tekstem posta: {ind.kol}",
              f"Unikalnych postów: {len(ind.teksty)} (bez tekstu/krótkie: {n_krotkich})",
-             f"Ustawienia: {ust}", "=" * 70, ""]
+             f"Ustawienia: {ust}",
+             "Legenda kluczy: klucz(idf)[w ilu postach], * = słowo z leadu artykułu",
+             "=" * 70, ""]
     for art, s in szczegoly.items():
         linie.append(f"ARTYKUŁ: {art}")
-        linie.append("  klucze (idf)[w ilu postach]: " +
-                     ", ".join(f"{k}({i})[{d}]" for k, i, d in s["klucze"]))
+        if pobrane and art in pobrane:
+            p = pobrane[art]
+            if p["blad"]:
+                linie.append(f"  pobieranie: BŁĄD {p['blad']}")
+            else:
+                linie.append(f"  tytuł SEO: {p['tytul_seo']}")
+                linie.append(f"  H1: {p['h1']}")
+                linie.append(f"  lead: {p['lead'][:300]}")
+        linie.append("  klucze: " + ", ".join(
+            f"{k}({i})[{d}]{'*' if z == 'lead' else ''}" for k, i, d, z in s["klucze"]))
         if s["powod"]:
             linie.append(f"  ⚠ {s['powod']}")
         for c in s["kandydaci"]:
