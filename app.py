@@ -96,7 +96,7 @@ with st.sidebar:
 
     st.header("Leady z artykułów")
     pobierz_leady = st.checkbox(
-        "Pobierz leady z artykułów (wolniej)", value=False,
+        "Pobierz leady z artykułów (wolniej)", value=True,
         help="Pobiera tytuł i lead artykułów, które nie zostały znalezione bezpośrednio, "
              "i dodaje ich najrzadsze słowa do dopasowania.")
     selektor = st.text_input("Selektor CSS leadu (opcjonalnie)", "",
