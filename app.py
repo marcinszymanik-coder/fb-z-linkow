@@ -103,7 +103,7 @@ with st.sidebar:
                              disabled=not pobierz_leady,
                              help="Domyślnie: pierwszy dłuższy akapit <p> w treści strony. "
                                   "Przykład: article p")
-    max_akapitow = st.slider("Liczba akapitów leadu", 1, 3, 1, disabled=not pobierz_leady)
+    max_akapitow = st.slider("Liczba akapitów leadu", 1, 3, 3, disabled=not pobierz_leady)
     liczba_kluczy_leadu = st.slider("Słowa z leadu do dopasowania", 0, 15, 8,
                                     disabled=not pobierz_leady)
     waga_leadu = st.slider("Udział leadu w wyniku (0–1)", 0.1, 0.9, 0.4, 0.1,
